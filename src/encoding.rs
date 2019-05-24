@@ -12,6 +12,11 @@ use ::bytes::{Buf, BufMut};
 use crate::DecodeError;
 use crate::Message;
 
+// TODO
+// proper benchmark and profiling
+// look at the codec thing in tikv
+// use Bytes instead of Vec<u8>
+
 /// Encodes an integer value into LEB128 variable length format, and writes it to the buffer.
 /// The buffer must have enough remaining space (maximum 10 bytes).
 #[inline]
@@ -64,12 +69,12 @@ where
         return Err(DecodeError::new("invalid varint"));
     }
 
-    let byte = bytes[0];
+    let byte = unsafe { *bytes.get_unchecked(0) };
     if byte < 0x80 {
         buf.advance(1);
         Ok(u64::from(byte))
     } else if len > 10 || bytes[len - 1] < 0x80 {
-        let (value, advance) = decode_varint_slice(bytes)?;
+        let (value, advance) = unsafe { decode_varint_slice(bytes)? };
         buf.advance(advance);
         Ok(value)
     } else {
@@ -189,77 +194,85 @@ impl RecursionGuard {
 ///
 /// Based loosely on [`ReadVarint64FromArray`][1].
 ///
+/// ## Safety
+///
+/// TODO
+///
 /// [1]: https://github.com/google/protobuf/blob/3.3.x/src/google/protobuf/io/coded_stream.cc#L365-L406
 #[inline]
-fn decode_varint_slice(bytes: &[u8]) -> Result<(u64, usize), DecodeError> {
-    // Fully unrolled varint decoding loop. Splitting into 32-bit pieces gives better performance.
+unsafe fn decode_varint_slice(bytes: &[u8]) -> Result<(u64, usize), DecodeError> {
+    // Fully unrolled varint decoding loop.
 
     let mut b: u8;
-    let mut part0: u32;
-    b = bytes[0];
-    part0 = u32::from(b);
-    if b < 0x80 {
-        return Ok((u64::from(part0), 1));
-    };
-    part0 -= 0x80;
-    b = bytes[1];
-    part0 += u32::from(b) << 7;
-    if b < 0x80 {
-        return Ok((u64::from(part0), 2));
-    };
-    part0 -= 0x80 << 7;
-    b = bytes[2];
-    part0 += u32::from(b) << 14;
-    if b < 0x80 {
-        return Ok((u64::from(part0), 3));
-    };
-    part0 -= 0x80 << 14;
-    b = bytes[3];
-    part0 += u32::from(b) << 21;
-    if b < 0x80 {
-        return Ok((u64::from(part0), 4));
-    };
-    part0 -= 0x80 << 21;
-    let value = u64::from(part0);
+    let mut value: u64;
 
-    let mut part1: u32;
-    b = bytes[4];
-    part1 = u32::from(b);
+    b = *bytes.get_unchecked(0);
+    value = u64::from(b);
     if b < 0x80 {
-        return Ok((value + (u64::from(part1) << 28), 5));
-    };
-    part1 -= 0x80;
-    b = bytes[5];
-    part1 += u32::from(b) << 7;
-    if b < 0x80 {
-        return Ok((value + (u64::from(part1) << 28), 6));
-    };
-    part1 -= 0x80 << 7;
-    b = bytes[6];
-    part1 += u32::from(b) << 14;
-    if b < 0x80 {
-        return Ok((value + (u64::from(part1) << 28), 7));
-    };
-    part1 -= 0x80 << 14;
-    b = bytes[7];
-    part1 += u32::from(b) << 21;
-    if b < 0x80 {
-        return Ok((value + (u64::from(part1) << 28), 8));
-    };
-    part1 -= 0x80 << 21;
-    let value = value + ((u64::from(part1)) << 28);
+        return Ok((value, 1));
+    }
+    value -= 0x80;
 
-    let mut part2: u32;
-    b = bytes[8];
-    part2 = u32::from(b);
+    b = *bytes.get_unchecked(1);
+    value += u64::from(b) << 7;
     if b < 0x80 {
-        return Ok((value + (u64::from(part2) << 56), 9));
-    };
-    part2 -= 0x80;
-    b = bytes[9];
-    part2 += u32::from(b) << 7;
+        return Ok((value, 2));
+    }
+    value -= 0x80 << 7;
+
+    b = *bytes.get_unchecked(2);
+    value += u64::from(b) << 14;
     if b < 0x80 {
-        return Ok((value + (u64::from(part2) << 56), 10));
+        return Ok((value, 3));
+    }
+    value -= 0x80 << 14;
+
+    b = *bytes.get_unchecked(3);
+    value += u64::from(b) << 21;
+    if b < 0x80 {
+        return Ok((value, 4));
+    }
+    value -= 0x80 << 21;
+
+    b = *bytes.get_unchecked(4);
+    value += u64::from(b) << 28;
+    if b < 0x80 {
+        return Ok((value, 5));
+    }
+    value -= 0x80 << 28;
+
+    b = *bytes.get_unchecked(5);
+    value += u64::from(b) << 35;
+    if b < 0x80 {
+        return Ok((value, 6));
+    }
+    value -= 0x80 << 35;
+
+    b = *bytes.get_unchecked(6);
+    value += u64::from(b) << 42;
+    if b < 0x80 {
+        return Ok((value, 7));
+    }
+    value -= 0x80 << 42;
+
+    b = *bytes.get_unchecked(7);
+    value += u64::from(b) << 49;
+    if b < 0x80 {
+        return Ok((value, 8));
+    }
+    value -= 0x80 << 49;
+
+    b = *bytes.get_unchecked(8);
+    value += u64::from(b) << 56;
+    if b < 0x80 {
+        return Ok((value, 9));
+    }
+    value -= 0x80 << 56;
+
+    b = *bytes.get_unchecked(9);
+    value += u64::from(b) << 63;
+    if b < 0x80 {
+        return Ok((value, 10));
     };
 
     // We have overrun the maximum size of a varint (10 bytes). Assume the data is corrupt.
@@ -309,9 +322,9 @@ pub const MIN_TAG: u32 = 1;
 pub const MAX_TAG: u32 = (1 << 29) - 1;
 
 impl WireType {
-    // TODO: impl TryFrom<u8> when stable.
-    #[inline]
-    pub fn try_from(val: u8) -> Result<WireType, DecodeError> {
+    // TODO: impl TryFrom<u64> when stable.
+    #[inline(always)]
+    pub fn try_from(val: u64) -> Result<WireType, DecodeError> {
         match val {
             0 => Ok(WireType::Varint),
             1 => Ok(WireType::SixtyFourBit),
@@ -341,16 +354,16 @@ where
 
 /// Decodes a Protobuf field key, which consists of a wire type designator and
 /// the field tag.
-#[inline]
+#[inline(always)]
 pub fn decode_key<B>(buf: &mut B) -> Result<(u32, WireType), DecodeError>
 where
     B: Buf,
 {
     let key = decode_varint(buf)?;
     if key > u64::from(u32::MAX) {
-        return Err(DecodeError::new(format!("invalid key value: {}", key)));
+       return  Err(DecodeError::new("invalid varint"));
     }
-    let wire_type = WireType::try_from(key as u8 & 0x07)?;
+    let wire_type = WireType::try_from(key & 0x07)?;
     let tag = key as u32 >> 3;
 
     if tag < MIN_TAG {
@@ -455,7 +468,7 @@ macro_rules! encode_repeated {
     };
 }
 
-/// Helper macro which emits a `merge_repeated_numeric` function for the numeric type.
+/// Helper macro which emits a `merge_repeated` function for the numeric type.
 macro_rules! merge_repeated_numeric {
     ($ty:ty,
      $wire_type:expr,
@@ -472,8 +485,6 @@ macro_rules! merge_repeated_numeric {
         {
             if wire_type == WireType::LengthDelimited {
                 // Packed.
-                let recursion_guard = ctx.enter_recursion();
-                recursion_guard.limit_reached()?;
                 merge_loop(values, buf, ctx, |values, buf, ctx| {
                     let mut value = Default::default();
                     $merge($wire_type, &mut value, buf, ctx)?;
@@ -484,8 +495,6 @@ macro_rules! merge_repeated_numeric {
                 // Unpacked.
                 check_wire_type($wire_type, wire_type)?;
                 let mut value = Default::default();
-                let recursion_guard = ctx.enter_recursion();
-                recursion_guard.limit_reached()?;
                 $merge(wire_type, &mut value, buf, ctx)?;
                 values.push(value);
                 Ok(())
@@ -887,6 +896,14 @@ pub mod bytes {
     where
         B: Buf,
     {
+        unsafe fn copy_bytes_to_vec(v: &mut Vec<u8>, s: &[u8]) {
+            let v_len = v.len();
+            let s_len = s.len();
+            let dst = v.as_mut_slice().get_unchecked_mut(v_len) as *mut u8;
+            ::std::ptr::copy_nonoverlapping::<u8>(&s[0] as *const u8, dst, s_len);
+            v.set_len(v_len + s_len);
+        }
+
         check_wire_type(WireType::LengthDelimited, wire_type)?;
         let len = decode_varint(buf)?;
         if len > buf.remaining() as u64 {
@@ -894,13 +911,17 @@ pub mod bytes {
         }
 
         let mut remaining = len as usize;
+        value.reserve(remaining);
         while remaining > 0 {
             let len = {
                 let bytes = buf.bytes();
                 debug_assert!(!bytes.is_empty(), "Buf::bytes returned empty slice");
                 let len = min(remaining, bytes.len());
                 let bytes = &bytes[..len];
-                value.extend_from_slice(bytes);
+                unsafe {
+                    debug_assert!(value.capacity() >= bytes.len());
+                    copy_bytes_to_vec(value, bytes);
+                }
                 len
             };
             remaining -= len;
@@ -965,9 +986,9 @@ pub mod message {
         B: Buf,
     {
         check_wire_type(WireType::LengthDelimited, wire_type)?;
-        let mut msg = M::default();
-        merge(WireType::LengthDelimited, &mut msg, buf, ctx)?;
-        messages.push(msg);
+        let len = messages.len();
+        messages.resize_with(len + 1, M::default);
+        merge(WireType::LengthDelimited, &mut messages[len], buf, ctx)?;
         Ok(())
     }
 
